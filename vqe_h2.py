@@ -72,4 +72,4 @@ def main():
     stepsize = 0.2
     num_steps = 1000
     theta = qml.numpy.array([0.02], requires_grad=True)
-    optimization(stepsize, num_steps, params)
+    optimization(stepsize, num_steps, theta)
