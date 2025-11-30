@@ -13,13 +13,13 @@ def fermion_to_qb(fermion):
     return qml.bravyi_kitaev(fermion, max(fermion.wires)+1)
 
 class Chemical:
-    def __init__(self, mol: qchem.Molecule, qb: Literal["default.qubit", "mixed.qubit", "lightning.qubit", "lightning.gpu"] = "default.qubit"):
+    def __init__(self, mol: qchem.Molecule,
+                 qb: Literal["default.qubit", "default.mixed", "lightning.qubit", "lightning.gpu"] = "default.mixed"):
 
         self.molecule = mol
 
         # Chemical/Fermionic Hamiltonian
-        self.chem_hamiltonian = qchem.fermionic_hamiltonian(mol)()
-
+        self.chem_hamiltonian = qchem.fermionic_hamiltonian(mol)()  # Defaults to RHF
         # Properties used in VQE
         self.n_electrons = self.molecule.n_electrons
         self.n_qubits = len(self.chem_hamiltonian.wires)
@@ -38,7 +38,7 @@ class Chemical:
         :param qpe_refine: whether to refine the state with QPE (not implemented yet)
         :return:
         """
-        init_state = qchem.hf_state(self.n_electrons, self.n_qubits, basis="bravyi_kitaev") # Change basis to be the basis of the chosen mapping
+        init_state = qchem.hf_state(self.n_electrons, self.n_qubits, basis="bravyi_kitaev")  # Change basis to be the basis of the chosen mapping
 
         singles, doubles = qchem.excitations(self.n_electrons, self.n_qubits)
 
@@ -190,13 +190,23 @@ def test_lithium():
     energy = Chemical(lithium).run_vqe(stepsize, num_steps)
     return energy
 
-def test_li_ion():
+def test_lithium2():
     stepsize = 0.2
     num_steps = 1000
 
     symbols = ['Li']
     geometry = np.array([[0.0, 0.0, 0.0]])
     lithium = qml.qchem.Molecule(symbols, geometry, mult=2)
+    energy = Chemical(lithium).run_vqe(stepsize, num_steps)
+    return energy
+
+def test_li_ion():
+    stepsize = 0.2
+    num_steps = 1000
+
+    symbols = ['Li']
+    geometry = np.array([[0.0, 0.0, 0.0]])
+    lithium = qml.qchem.Molecule(symbols, geometry, charge=1)
     energy = Chemical(lithium).run_vqe(stepsize, num_steps)
     return energy
 
