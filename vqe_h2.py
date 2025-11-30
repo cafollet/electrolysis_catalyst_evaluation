@@ -12,9 +12,10 @@ def fermion_to_qb(fermion):
     "test function for bravyi-kitaev mapping"
     return qml.bravyi_kitaev(fermion, max(fermion.wires)+1)
 
+# "default.mixed", "lightning.qubit", "lightning.gpu" do not work yet!
 class Chemical:
     def __init__(self, mol: qchem.Molecule,
-                 qb: Literal["default.qubit", "default.mixed", "lightning.qubit", "lightning.gpu"] = "default.mixed"):
+                 qb: Literal["default.qubit", "default.mixed", "lightning.qubit", "lightning.gpu"] = "default.qubit"):
 
         self.molecule = mol
 
