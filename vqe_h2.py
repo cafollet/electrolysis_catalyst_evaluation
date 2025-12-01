@@ -6,11 +6,52 @@ import optax
 import jax
 from typing import Literal
 from pennylane.fermi import from_string
-# import fermion_to_qb from [mapping_file]
+from pennylane import jordan_wigner, bravyi_kitaev
+from pennylane.fermi import parity_transform
 
 def fermion_to_qb(fermion):
-    "test function for bravyi-kitaev mapping"
-    return qml.bravyi_kitaev(fermion, max(fermion.wires)+1)
+    """
+    Apply Jordan–Wigner, Bravyi–Kitaev, and Parity mappings to a fermionic Hamiltonian,
+    compute arithmetic_depth of each mapped qubit Hamiltonian,
+    and return the one with minimal depth.
+
+    Args:
+        fermion (FermiSentence): The fermionic Hamiltonian to map.
+
+    Returns:
+        tuple:
+            best_hamiltonian (qml.Hamiltonian): Qubit Hamiltonian with minimal depth.
+            best_name (str): Name of the mapping producing this Hamiltonian. One of these occupation_number (jordan_wigner), bravyi_kitaev, or parity
+    """
+
+    mappings = {
+        "occupation_number": lambda h: jordan_wigner(h),
+        "bravyi_kitaev": lambda h: bravyi_kitaev(h, max(fermion.wires)+1),
+        "parity": lambda h: parity_transform(h, n=max(fermion.wires)+1),
+    }
+
+    results = {}
+
+    for name, mapping_fn in mappings.items():
+        # 1. Map fermions → qubits
+        H_qubit = mapping_fn(fermion)
+
+        # 2. Measure arithmetic depth
+        depth = H_qubit.arithmetic_depth
+
+        results[name] = {
+            "hamiltonian": H_qubit,
+            "depth": depth,
+        }
+
+    # 3. Pick mapping with smallest arithmetic depth
+    best_name = min(results, key=lambda k: results[k]["depth"])
+    best_hamiltonian = results[best_name]["hamiltonian"]
+
+    #print("Best mapping:", best_name)
+    #print("Best arithmetic depth:", results[best_name]["depth"])
+    #print("Best qubit Hamiltonian:\n", best_hamiltonian)
+    return best_hamiltonian, best_name
 
 # "default.mixed", "lightning.qubit", "lightning.gpu" do not work yet!
 class Chemical:
@@ -26,7 +67,7 @@ class Chemical:
         self.n_qubits = len(self.chem_hamiltonian.wires)
 
         # Apply Fermionic Mapping
-        self.qubit_hamiltonian = fermion_to_qb(self.chem_hamiltonian)
+        self.qubit_hamiltonian, self.basis = fermion_to_qb(self.chem_hamiltonian)
 
         # Define circuit device
         self.device = qml.device(qb)
@@ -39,7 +80,7 @@ class Chemical:
         :param qpe_refine: whether to refine the state with QPE (not implemented yet)
         :return:
         """
-        init_state = qchem.hf_state(self.n_electrons, self.n_qubits, basis="bravyi_kitaev")  # Change basis to be the basis of the chosen mapping
+        init_state = qchem.hf_state(self.n_electrons, self.n_qubits, basis=self.basis)
 
         singles, doubles = qchem.excitations(self.n_electrons, self.n_qubits)
 
@@ -57,11 +98,11 @@ class Chemical:
 
         singles_pauli = []
         for op in singles_fermi:
-            singles_pauli.append(fermion_to_qb(op))
+            singles_pauli.append(fermion_to_qb(op)[0])
 
         doubles_pauli = []
         for op in doubles_fermi:
-            doubles_pauli.append(fermion_to_qb(op))
+            doubles_pauli.append(fermion_to_qb(op)[0])
 
         @qml.qnode(device=self.device)
         def circuit_1(theta):
