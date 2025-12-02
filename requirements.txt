@@ -1,5 +1,7 @@
-pennylane==0.43.1
+
+pennylane~=0.43.1
 jax
 optax
 pyscf
 pandas
+openfermionpyscf

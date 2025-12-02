@@ -4,6 +4,8 @@ import pennylane as qml
 from jax import numpy as np
 import optax
 import jax
+import pyscf
+import openfermionpyscf
 from typing import Literal
 from pennylane.fermi import from_string
 from pennylane import jordan_wigner, bravyi_kitaev
@@ -25,7 +27,7 @@ def fermion_to_qb(fermion):
     """
 
     mappings = {
-        "occupation_number": lambda h: jordan_wigner(h),
+        "jordan_wigner": lambda h: jordan_wigner(h),
         "bravyi_kitaev": lambda h: bravyi_kitaev(h, max(fermion.wires)+1),
         "parity": lambda h: parity_transform(h, n=max(fermion.wires)+1),
     }
@@ -56,18 +58,34 @@ def fermion_to_qb(fermion):
 # "default.mixed", "lightning.qubit", "lightning.gpu" do not work yet!
 class Chemical:
     def __init__(self, mol: qchem.Molecule,
-                 qb: Literal["default.qubit", "default.mixed", "lightning.qubit", "lightning.gpu"] = "default.qubit"):
+                 qb: Literal["default.qubit", "default.mixed", "lightning.qubit", "lightning.gpu"] = "default.qubit",
+                 name: str = ""):
 
         self.molecule = mol
+        self.name = name
 
         # Chemical/Fermionic Hamiltonian
-        self.chem_hamiltonian = qchem.fermionic_hamiltonian(mol)()  # Defaults to RHF
+        try:
+            self.chem_hamiltonian = qchem.fermionic_hamiltonian(mol)()  # Defaults to RHF
+            rhf = True
+            self.n_qubits = len(self.chem_hamiltonian.wires)
+        except ValueError as e:
+            print("Unavailable to use RHF method: {}".format(e), "\n changing to OpenFermion...")
+            rhf = False
+
+
         # Properties used in VQE
         self.n_electrons = self.molecule.n_electrons
-        self.n_qubits = len(self.chem_hamiltonian.wires)
+
 
         # Apply Fermionic Mapping
-        self.qubit_hamiltonian, self.basis = fermion_to_qb(self.chem_hamiltonian)
+        if rhf:
+            self.qubit_hamiltonian, self.basis = fermion_to_qb(self.chem_hamiltonian)
+        else:
+            self.basis = "jordan_wigner" # Defaults to jordan_wigner mapping if fermion_to_qb is not able to run
+
+        # Test for using molecular_hamiltonian
+        self.qubit_hamiltonian, self.n_qubits = qchem.molecular_hamiltonian(mol, method="openfermion", mapping=self.basis)
 
         # Define circuit device
         self.device = qml.device(qb)
@@ -159,6 +177,9 @@ class Chemical:
             return np.real(circuit(theta))
 
         def optimization(stepsize: int, num_steps: int, param: np.array):
+
+            print(f"Optimizing {self.name if (self.name != "") else self.molecule.symbols}, {self.basis} basis chosen")
+
             optim = optax.adam(stepsize)
 
             opt_state = optim.init(param)
@@ -212,14 +233,14 @@ class Chemical:
 
 def test_hydrogen():
     stepsize = 0.2
-    num_steps = 1000
+    num_steps = 200
 
     symbols = ['H', 'H']
     geometry = np.array([[0.0, 0.0, -0.69434785],
                           [0.0, 0.0, 0.69434785]])
     # alpha = np.array([[3.42525091, 0.62391373, 0.1688554], [3.42525091, 0.62391373, 0.1688554]])
     hydrogen = qml.qchem.Molecule(symbols, geometry)
-    energy = Chemical(hydrogen).run_vqe(stepsize, num_steps)
+    energy = Chemical(hydrogen, name="Hydrogen Molecule").run_vqe(stepsize, num_steps)
     return energy
 
 def test_lithium():
@@ -229,17 +250,18 @@ def test_lithium():
     symbols = ['Li']
     geometry = np.array([[0.0, 0.0, 0.0]])
     lithium = qml.qchem.Molecule(symbols, geometry, mult=2)
-    energy = Chemical(lithium).run_vqe(stepsize, num_steps)
+    energy = Chemical(lithium, name="Lithium Atom").run_vqe(stepsize, num_steps)
     return energy
 
 def test_lithium2():
     stepsize = 0.2
     num_steps = 1000
 
-    symbols = ['Li']
-    geometry = np.array([[0.0, 0.0, 0.0]])
+    symbols = ['Li', 'Li']
+    geometry = np.array([[0.0, 0.0, 0.0],
+                         [0.0, 0.0, 2.6730]])
     lithium = qml.qchem.Molecule(symbols, geometry, mult=2)
-    energy = Chemical(lithium).run_vqe(stepsize, num_steps)
+    energy = Chemical(lithium, name="Lithium Atom").run_vqe(stepsize, num_steps)
     return energy
 
 def test_li_ion():
@@ -267,7 +289,7 @@ def test_beryllium():
 if __name__ == "__main__":
     jax.config.update("jax_enable_x64", True)
     h_nrg = test_hydrogen()
-    # li_nrg = test_lithium() Multiplicity doesnt work for this, only changing it to Li+ does (ion)
+    li_nrg = test_lithium() # Multiplicity doesnt work for this, only changing it to Li+ does (ion)
     li_ion_nrg = test_li_ion()
     be_nrg = test_beryllium()
     print(h_nrg, be_nrg)
