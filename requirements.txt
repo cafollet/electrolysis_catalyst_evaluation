@@ -3,3 +3,4 @@ jax
 optax
 pyscf
 pandas
+openfermionpyscf
