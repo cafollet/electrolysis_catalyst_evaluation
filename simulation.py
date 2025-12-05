@@ -565,7 +565,7 @@ def test_molybdenum():
         basis="def2-SVP",
         ecp="def2-SVP"
     )
-    energy = Chemical(molybdenum, name="Molybdenum Atom").run_simulation(stepsize, num_steps, method="sqd", key = "6o-DZuq0TlWxqBNG0Hk0flXCYjvK8EzWlYdeVFKXYwMQ")
+    energy = Chemical(molybdenum, name="Molybdenum Atom").run_simulation(stepsize, num_steps, method="sqd")
     return energy
 
 
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     import time
     jax.config.update("jax_enable_x64", True)
 
-    """# Testing time to run VQE vs SQD
+    # Testing time to run VQE vs SQD
     time_start = time.time()
     h_nrg = test_hydrogen()
     vqe_time_h = time.time() - time_start
@@ -599,7 +599,7 @@ if __name__ == "__main__":
           f"SQD Time: {round(sqd_time_li_ion, 2)}s - {min(li_ion_nrg_2)} H")
 
     print(f"\nSQD Average accuracy: {round(((min(li_ion_nrg_2)/li_ion_nrg)+(min(h_nrg_2)/h_nrg))*50, 0)}%")
-    print(f"\nSQD Li ion speedup: {round(vqe_time_li_ion/sqd_time_li_ion, 0)}x")"""
+    print(f"\nSQD Li ion speedup: {round(vqe_time_li_ion/sqd_time_li_ion, 0)}x")
 
     h_nrg = test_hydrogen_sqd()
     print("Hydrogen: ", min(h_nrg), "H")
@@ -607,8 +607,8 @@ if __name__ == "__main__":
     al_nrg = test_aluminum()
     print("Aluminum: ", min(al_nrg), "H")
 
-    mo_nrg = test_molybdenum()
-    print("Molybdenum: ", min(mo_nrg), "H")
+    # mo_nrg = test_molybdenum()
+    # print("Molybdenum: ", min(mo_nrg), "H")
 
 
 
