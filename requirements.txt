@@ -1,3 +1,9 @@
+qiskit-addon-sqd
+qiskit-aer
+qiskit
+ffsim
+qiskit-ibm-runtime
+numpy
 pennylane==0.43.1
 jax
 optax
