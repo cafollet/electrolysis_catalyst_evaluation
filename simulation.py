@@ -16,6 +16,13 @@ from qiskit_addon_sqd.fermion import (
     bitstring_matrix_to_ci_strs,
     solve_fermion,
 )
+from functools import partial
+
+from qiskit_addon_sqd.fermion import (
+    SCIResult,
+    diagonalize_fermionic_hamiltonian,
+    solve_sci_batch,
+)
 from qiskit_addon_sqd.subsampling import postselect_and_subsample, postselect_by_hamming_right_and_left, subsample
 import pyscf
 from pyscf import ao2mo, tools
@@ -312,7 +319,6 @@ class Chemical:
             pass_manager.pre_init = ffsim.qiskit.PRE_INIT
             isa_circuit = pass_manager.run(circuit)
 
-
             sampler = Sampler(mode=backend)
             sampler.options.dynamical_decoupling.enable = True
 
@@ -320,119 +326,70 @@ class Chemical:
 
             primitive_result = job.result()
             pub_result = primitive_result[0]
-            counts = pub_result.data.meas.get_counts()
 
-            # Convert counts into bitstring and probability arrays
-            bitstring_matrix_full, probs_arr_full = sqd.counts.counts_to_arrays(counts)
+            print("Quantum Portion Finished")
 
 
-            rng = np.random.default_rng(24)
             # SQD options
-            iterations = n_steps
+            energy_tol = 1e-4
+            occupancies_tol = 1e-4
+            max_iterations = n_steps
 
             # Eigenstate solver options
-            n_batches = 5
+            num_batches = 5
             samples_per_batch = step
-            max_davidson_cycles = 300
+            symmetrize_spin = False
+            carryover_threshold = 1e-4
+            max_cycle = 300
 
-            # Self-consistent configuration recovery loop
-            e_hist = np.zeros((iterations, n_batches))  # energy history
-            s_hist = np.zeros((iterations, n_batches))  # spin history
-            occupancy_hist = []
-            avg_occupancy = None
-            prnt = False
+            # eigensolver
+            sci_solver = partial(solve_sci_batch, max_cycle=max_cycle) # Add spin_sq=0 if not working
 
-            for i in range(iterations):
-                if i % (iterations//5) == 0:
-                    print(f"Starting configuration recovery iteration {i}")
-                    prnt = True
+            # intermediate results
+            result_history = []
 
-                # Noisy configurations
-                if avg_occupancy is None:
-                    bs_mat_tmp = bitstring_matrix_full
-                    probs_arr_tmp = probs_arr_full
-
-                # If we have average orbital occupancy information, we use it to refine the full set of noisy configurations
-                else:
-                    bs_mat_tmp, probs_arr_tmp = recover_configurations(
-                        bitstring_matrix_full,
-                        probs_arr_full,
-                        avg_occupancy,
-                        num_elec_a,
-                        num_elec_b,
-                        rand_seed=rng,
+            def callback(results: list[SCIResult]):
+                result_history.append(results)
+                iteration = len(result_history)
+                print(f"Iteration {iteration}")
+                for i, result in enumerate(results):
+                    print(f"\tSubsample {i}")
+                    print(f"\t\tEnergy: {result.energy + nuclear_repulsion_energy}")
+                    print(
+                        f"\t\tSubspace dimension: {np.prod(result.sci_state.amplitudes.shape)}"
                     )
+            print("Starting Post-Processing")
+            result = diagonalize_fermionic_hamiltonian(
+                hcore,
+                eri,
+                pub_result.data.meas,
+                samples_per_batch=samples_per_batch,
+                norb=num_orbitals,
+                nelec=nelec,
+                num_batches=num_batches,
+                energy_tol=energy_tol,
+                occupancies_tol=occupancies_tol,
+                max_iterations=max_iterations,
+                sci_solver=sci_solver,
+                symmetrize_spin=symmetrize_spin,
+                carryover_threshold=carryover_threshold,
+                callback=callback,
+                seed=12345,
+            )
 
-                # Create batches of subsamples. We post-select here to remove configurations
-                # with incorrect hamming weight during iteration 0, since no config recovery was performed.
-                batches = postselect_by_hamming_right_and_left(
-                    bs_mat_tmp,
-                    probs_arr_tmp,
-                    hamming_right=num_elec_a,
-                    hamming_left=num_elec_b,
-                )
-
-                new_bs_mat, new_probs_arr = postselect_by_hamming_right_and_left(
-                    bs_mat_tmp,
-                    probs_arr_tmp,
-                    hamming_right=num_elec_a,
-                    hamming_left=num_elec_b,
-                )
-
-                batches = subsample(
-                    new_bs_mat,
-                    new_probs_arr,
-                    samples_per_batch = samples_per_batch,
-                    num_batches = n_batches,
-                    rand_seed = rng,
-                )
-                # Run eigenstate solvers in a loop. This loop should be parallelized for larger problems.
-                e_tmp = np.zeros(n_batches)
-                s_tmp = np.zeros(n_batches)
-                occs_tmp = []
-                coeffs = []
-                for j in range(n_batches):
-                    strs_a, strs_b = bitstring_matrix_to_ci_strs(batches[j])
-
-                    if prnt:
-                        print(f"  Batch {j} subspace dimension: {len(strs_a) * len(strs_b)}")
-
-
-                    energy_sci, coeffs_sci, avg_occs, spin = solve_fermion(
-                        batches[j],
-                        hcore,
-                        eri,
-                        open_shell=open_shell,
-                        spin_sq=spin_sq,
-                        max_cycle=max_davidson_cycles,
-                    )
-
-                    energy_sci += nuclear_repulsion_energy
-                    e_tmp[j] = energy_sci
-                    s_tmp[j] = spin
-                    occs_tmp.append(avg_occs)
-                    coeffs.append(coeffs_sci)
-
-                if prnt:
-                    prnt = False
-
-                # Combine batch results
-                avg_occupancy = tuple(np.mean(occs_tmp, axis=0))
-
-                # Track optimization history
-                e_hist[i, :] = e_tmp
-                s_hist[i, :] = s_tmp
-                occupancy_hist.append(avg_occupancy)
-
-            print("Last found energy:", e_hist[-1])
-
-            energy = e_hist[-1]
+            energy = [
+                min(result, key=lambda res: res.energy).energy + nuclear_repulsion_energy
+                for result in result_history
+            ]
 
         return energy
 
 
-# def adsorption_energy(step, n_steps, adsorbate:, substrate, combo, method: Literal["vqe", "sqd"]="sqd"):
-
+def adsorption_energy(step, n_steps, adsorbate, surface, combo, method: Literal["vqe", "sqd"]="sqd", key = None):
+    ads_energy = min(Chemical(adsorbate).run_simulation(step, n_steps, method=method, key=key))
+    sub_energy = min(Chemical(surface).run_simulation(step, n_steps, method=method, key=key))
+    combo_energy = min(Chemical(combo).run_simulation(step, n_steps, method=method, key=key))
+    return combo_energy-sub_energy-ads_energy
 
 def test_hydrogen():
     stepsize = 0.2
@@ -484,7 +441,6 @@ def test_beryllium():
 
     symbols = ['Be']
     geometry = jnp.array([[0.0, 0.0, 0.0]])
-    # alpha = jnp.array([[3.42525091, 0.62391373, 0.1688554], [3.42525091, 0.62391373, 0.1688554]], requires_grad = False)
     lithium = qml.qchem.Molecule(symbols, geometry)
     energy = Chemical(lithium).run_simulation(stepsize, num_steps)
     return energy
@@ -573,34 +529,6 @@ if __name__ == "__main__":
     import time
     jax.config.update("jax_enable_x64", True)
 
-    # Testing time to run VQE vs SQD
-    time_start = time.time()
-    h_nrg = test_hydrogen()
-    vqe_time_h = time.time() - time_start
-
-    time_start = time.time()
-    h_nrg_2 = test_hydrogen_sqd()
-    sqd_time_h = time.time() - time_start
-
-    time_start = time.time()
-    li_ion_nrg = test_li_ion()
-    vqe_time_li_ion = time.time() - time_start
-
-    time_start = time.time()
-    li_ion_nrg_2 = test_li_ion_sqd()
-    sqd_time_li_ion = time.time() - time_start
-
-    print(f"Times to compile - Energy: ")
-    print(f"\nHydrogen")
-    print(f"VQE: {round(vqe_time_h, 2)}s - {h_nrg} H, "
-          f"SQD: {round(sqd_time_h, 2)}s - {min(h_nrg_2)} H")
-    print(f"\nLithium")
-    print(f"VQE time: {round(vqe_time_li_ion, 2)}s - {li_ion_nrg} H, "
-          f"SQD Time: {round(sqd_time_li_ion, 2)}s - {min(li_ion_nrg_2)} H")
-
-    print(f"\nSQD Average accuracy: {round(((min(li_ion_nrg_2)/li_ion_nrg)+(min(h_nrg_2)/h_nrg))*50, 0)}%")
-    print(f"\nSQD Li ion speedup: {round(vqe_time_li_ion/sqd_time_li_ion, 0)}x")
-
     h_nrg = test_hydrogen_sqd()
     print("Hydrogen: ", min(h_nrg), "H")
 
@@ -611,13 +539,5 @@ if __name__ == "__main__":
     # print("Molybdenum: ", min(mo_nrg), "H")
 
 
-
     # ti_nrg = test_titanium()
     # print("Titanium: ", min(ti_nrg), "H")
-
-
-
-    """Restricted Hartree-Fock (RHF) methods, often used by default, do not support open-shell systems 
-    (those with unpaired electrons). 
-    Suggestion for future improvement: Try using PySCF with the appropriate settings 
-    (e.g., Unrestricted Hartree-Fock, UHF) to handle open-shell configurations."""
